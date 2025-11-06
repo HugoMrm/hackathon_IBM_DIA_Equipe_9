@@ -1,5 +1,29 @@
 <template>
   <div class="flex min-h-screen flex-col bg-slate-50 text-slate-900">
+    <!-- 🔒 Password modal -->
+    <div
+      v-if="!isAuthenticated"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+    >
+      <div class="rounded-3xl bg-white p-8 shadow-2xl w-full max-w-sm text-center space-y-4">
+        <h2 class="text-lg font-semibold text-slate-800">Entrez le mot de passe</h2>
+        <input
+          v-model="passwordInput"
+          type="password"
+          placeholder="Mot de passe"
+          class="w-full rounded-xl border border-slate-300 px-4 py-2 text-sm focus:border-sky-400 focus:ring-1 focus:ring-sky-400 outline-none"
+          @keyup.enter="validatePassword"
+        />
+        <p v-if="passwordError" class="text-sm text-rose-500">{{ passwordError }}</p>
+        <button
+          @click="validatePassword"
+          class="w-full rounded-full bg-sky-500 px-5 py-2 text-sm font-semibold text-white transition hover:bg-sky-400"
+        >
+          Valider
+        </button>
+      </div>
+    </div>
+
     <header class="border-b border-slate-200/80 bg-white/90 backdrop-blur">
       <div class="mx-auto flex w-full max-w-4xl flex-wrap items-center justify-between gap-4 px-6 py-6">
         <div class="flex items-center gap-3">
@@ -128,10 +152,28 @@
 </template>
 
 <script setup>
-import { nextTick, ref, watch } from 'vue'
+import { nextTick, ref, watch, onMounted } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import SuperLogo from '@/assets/logos/logo.png'
+
+// === 🔒 Password handling ===
+const password = ref('')
+const passwordInput = ref('')
+const passwordError = ref('')
+const isAuthenticated = ref(false)
+
+const validatePassword = () => {
+  if (passwordInput.value.trim() === '') {
+    passwordError.value = 'Le mot de passe est requis.'
+    return
+  }
+  password.value = passwordInput.value.trim()
+  isAuthenticated.value = true
+  passwordError.value = ''
+}
+
+// ============================
 
 const fallbackOrigin =
   typeof window !== 'undefined' && window.location.origin !== 'null' ? window.location.origin : ''
@@ -190,86 +232,47 @@ const conversation = ref([initialAssistantMessage()])
 const logoSrc = SuperLogo
 
 const formatTimestamp = (isoString) => {
-  if (!isoString) {
-    return ''
-  }
-
   const date = new Date(isoString)
-  if (Number.isNaN(date.getTime())) {
-    return ''
-  }
-
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-const scrollToBottom = () => {
-  nextTick(() => {
-    if (chatContainer.value) {
-      chatContainer.value.scrollTop = chatContainer.value.scrollHeight
-    }
-  })
-}
+const scrollToBottom = () => nextTick(() => {
+  if (chatContainer.value) chatContainer.value.scrollTop = chatContainer.value.scrollHeight
+})
 
-watch(
-  conversation,
-  () => {
-    scrollToBottom()
-  },
-  { deep: true }
-)
+watch(conversation, scrollToBottom, { deep: true })
 
+// === 🔒 Modified to include password ===
 const buildEndpointUrl = (messageContent) => {
-  const search = new URLSearchParams({ message: messageContent })
-
-  if (backendBase) {
-    return `${backendBase}/message?${search.toString()}`
-  }
-
-  return `/message?${search.toString()}`
+  const search = new URLSearchParams({ message: messageContent, password: password.value })
+  return backendBase ? `${backendBase}/message?${search.toString()}` : `/message?${search.toString()}`
 }
+// ========================================
 
-const renderMarkdown = (rawText) => {
-  const text = typeof rawText === 'string' ? rawText : ''
-  const rendered = marked.parse(text, { breaks: true })
-  return DOMPurify.sanitize(rendered)
-}
-
-const appendMessage = (payload) => {
-  conversation.value.push(payload)
-}
+const renderMarkdown = (rawText) => DOMPurify.sanitize(marked.parse(typeof rawText === 'string' ? rawText : '', { breaks: true }))
+const appendMessage = (payload) => conversation.value.push(payload)
 
 const applySuggestion = (prompt) => {
   newMessage.value = prompt
-
-  nextTick(() => {
-    if (messageInput.value) {
-      messageInput.value.focus()
-      messageInput.value.setSelectionRange(prompt.length, prompt.length)
-    }
-  })
+  nextTick(() => messageInput.value?.focus())
 }
 
 const handleSubmitOnEnter = () => {
-  if (!isLoading.value && newMessage.value.trim() !== '') {
-    sendMessage()
-  }
+  if (!isLoading.value && newMessage.value.trim() !== '') sendMessage()
 }
 
 const resetConversation = () => {
   newMessage.value = ''
   errorMessage.value = ''
   conversation.value = [initialAssistantMessage()]
-
-  nextTick(() => {
-    if (messageInput.value) {
-      messageInput.value.focus()
-    }
-  })
+  nextTick(() => messageInput.value?.focus())
 }
 
 const sendMessage = async () => {
   const trimmedMessage = newMessage.value.trim()
-  if (trimmedMessage === '' || isLoading.value) {
+  if (trimmedMessage === '' || isLoading.value) return
+  if (!isAuthenticated.value) {
+    errorMessage.value = 'Veuillez entrer le mot de passe avant de discuter.'
     return
   }
 
@@ -286,43 +289,28 @@ const sendMessage = async () => {
   isLoading.value = true
 
   try {
-    const response = await fetch(buildEndpointUrl(trimmedMessage), {
-      method: 'POST'
-    })
-
+    const response = await fetch(buildEndpointUrl(trimmedMessage), { method: 'POST' })
     const payload = await response.json().catch(() => ({}))
 
-    if (!response.ok) {
-      const detail = typeof payload?.detail === 'string' ? payload.detail : 'Unable to get a reply right now.'
-      throw new Error(detail)
-    }
-
-    const assistantMessage = {
-      id: createId('assistant'),
-      role: 'assistant',
-      content: payload?.message ?? 'I could not generate a response, please try again.',
-      createdAt: payload?.created_at ?? new Date().toISOString()
-    }
-
-    appendMessage(assistantMessage)
-  } catch (error) {
-    const safeMessage = error instanceof Error ? error.message : 'Something went wrong while contacting the agent.'
-    errorMessage.value = safeMessage
+    if (!response.ok) throw new Error(payload?.detail ?? 'Unable to get a reply right now.')
 
     appendMessage({
       id: createId('assistant'),
       role: 'assistant',
-      content: `⚠️ ${safeMessage}`,
+      content: payload?.message ?? 'I could not generate a response, please try again.',
+      createdAt: payload?.created_at ?? new Date().toISOString()
+    })
+  } catch (error) {
+    errorMessage.value = error.message ?? 'Something went wrong while contacting the agent.'
+    appendMessage({
+      id: createId('assistant'),
+      role: 'assistant',
+      content: `⚠️ ${errorMessage.value}`,
       createdAt: new Date().toISOString()
     })
   } finally {
     isLoading.value = false
-
-    nextTick(() => {
-      if (messageInput.value) {
-        messageInput.value.focus()
-      }
-    })
+    nextTick(() => messageInput.value?.focus())
   }
 }
 </script>
