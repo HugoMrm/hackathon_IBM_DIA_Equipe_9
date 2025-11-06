@@ -6,6 +6,7 @@ from app.services.watsonx_service import run_sql_query
 from langchain.tools.render import render_text_description
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
+from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_openai import OpenAIEmbeddings
 from langfuse.decorators import langfuse_context, observe
 from supabase import create_client, Client
@@ -67,7 +68,17 @@ class BasicAgent(AgentBase):
                 f"SELECT Title, Content FROM supa_pg_db_catalog.public.ai_data WHERE id = CAST('{question_id}' AS uuid)"
             )
 
-        return [get_relevant_question_titles, get_question_detail_by_id]
+        @tool
+        async def web_search(query: str):
+            """
+            Perform a web search to get up-to-date, high-quality search results.
+            Useful for finding recent information not in your database.
+            You must use sources from the Pole Universitaire Leonard de Vinci website, or the esilv.fr website, or the emlv.fr website.
+            """
+            results = await asyncio.to_thread(TavilySearchResults(max_results=5).run, query)
+            return results
+
+        return [get_relevant_question_titles, get_question_detail_by_id, web_search]
 
     @observe(as_type="generation")
     async def send_message(self, user_message: str) -> str:
